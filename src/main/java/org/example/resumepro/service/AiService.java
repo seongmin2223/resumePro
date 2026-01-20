@@ -31,7 +31,7 @@ public class AiService {
     }
 
     @Transactional
-    public String checkAndSaveResume(String userResume) {
+    public String checkAndSaveResume(String userResume, String userEmail) {
         if (userResume == null || userResume.trim().isEmpty()) {
             return "분석할 내용이 없습니다.";
         }
@@ -62,6 +62,7 @@ public class AiService {
             }
 
             ResumeHistory history = ResumeHistory.builder()
+                    .userEmail(userEmail) // 여기서 이메일을 넣어줍니다.
                     .userResume(userResume)
                     .aiResponse(response)
                     .build();
@@ -75,8 +76,9 @@ public class AiService {
     }
 
     @Transactional(readOnly = true)
-    public List<ResumeHistory> getAllHistory() {
-        return resumeRepository.findAllByOrderByCreatedAtDesc();
+    public List<ResumeHistory> getMyHistory(String userEmail) {
+        // Repository에 추가한 메서드를 호출합니다.
+        return resumeRepository.findByUserEmailOrderByCreatedAtDesc(userEmail);
     }
 
     public byte[] generatePdf(Long historyId) {

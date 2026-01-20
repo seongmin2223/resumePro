@@ -36,6 +36,9 @@ dependencies {
     implementation 'org.springframework.ai:spring-ai-starter-model-google-genai'
     implementation 'org.springframework.ai:spring-ai-tika-document-reader'
 
+    // 이메일발송
+    implementation 'org.springframework.boot:spring-boot-starter-mail'
+
     // [추가] 카카오 로그인 및 OAuth2 인증용
     implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
 

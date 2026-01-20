@@ -16,6 +16,9 @@ public class ResumeHistory {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // 사용자 식별을 위한 필드 추가
+    private String userEmail;
+
     @Column(columnDefinition = "LONGTEXT")
     private String userResume;
 

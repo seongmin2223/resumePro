@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import SockJS from 'sockjs-client';
 import Stomp from 'stompjs';
 
+// API 인스턴스 설정
 const api = axios.create({
     baseURL: 'http://localhost:8080',
     withCredentials: true
@@ -20,10 +21,8 @@ function App() {
     const [inputChat, setInputChat] = useState('');
     const [stompClient, setStompClient] = useState(null);
 
-    // 인증 관련 상태
-    const [isLoggedIn, setIsLoggedIn] = useState(() => {
-        return localStorage.getItem('isLoggedIn') === 'true';
-    });
+    // 인증 관련 상태 (로컬 스토리지 초기화 통합)
+    const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('isLoggedIn') === 'true');
     const [currentUser, setCurrentUser] = useState(() => {
         const savedUser = localStorage.getItem('user');
         return savedUser ? JSON.parse(savedUser) : null;
@@ -38,23 +37,45 @@ function App() {
         setAuthData({ ...authData, [e.target.name]: e.target.value });
     };
 
-    const handleSignup = async () => {
+    // 이메일 발송
+    const handleEmailSend = async () => {
+        if (!result) return alert("발송할 리포트 내용이 없습니다.");
+
+        const targetEmail = prompt("리포트를 받을 이메일 주소를 입력하세요:", currentUser?.email);
+
+        if (!targetEmail) return;
+
         try {
-            // 경로 앞에 / 를 반드시 붙여주세요 (/api/auth/signup)
+            await api.post('/api/ai/send-email', {
+                email: targetEmail,
+                content: result
+            });
+            alert("이메일이 성공적으로 발송되었습니다.");
+        } catch (error) {
+            alert("이메일 발송에 실패했습니다.");
+        }
+    };
+
+    // 회원가입
+    const handleSignup = async () => {
+        if (!authData.email || !authData.password || !authData.nickname) return alert("모든 항목을 입력해주세요.");
+        try {
             await api.post('/api/auth/signup', authData);
             alert("회원가입 성공! 로그인해주세요.");
             setAuthMode('login');
         } catch (error) {
-            // [object Object] 방지를 위해 상세 에러 로그 확인
-            console.error("회원가입 상세 에러:", error.response);
-            const errorMsg = error.response?.data?.message || error.response?.data || "서버 연결 오류";
-            alert("회원가입 실패 : " + errorMsg);
+            console.error("로그인 에러 데이터:", error.response?.data);
+            // [object Object] 방지를 위해 문자열인지 확인 후 출력
+            const errorDetail = typeof error.response?.data === 'string'
+                ? error.response.data
+                : (error.response?.data?.message || "로그인 정보를 확인하세요.");
+            alert("로그인 실패: " + errorDetail);
         }
     };
 
+    // 로그인
     const handleLogin = async () => {
         try {
-            // 백엔드 응답에 유저 정보를 포함하도록 수정했다면 data를 사용
             const response = await api.post('/api/auth/login', {
                 email: authData.email,
                 password: authData.password
@@ -62,6 +83,7 @@ function App() {
 
             alert("로그인 성공!");
 
+            // 서버 응답에서 닉네임 추출 (서버에서 넘겨주는 key값 확인 필요)
             const userObj = {
                 email: authData.email,
                 nickname: response.data.nickname || authData.nickname || "테스트"
@@ -69,26 +91,42 @@ function App() {
 
             setIsLoggedIn(true);
             setCurrentUser(userObj);
-
-            // 로컬 스토리지에 저장 (새로고침 대비)
             localStorage.setItem('isLoggedIn', 'true');
             localStorage.setItem('user', JSON.stringify(userObj));
 
             fetchHistory();
         } catch (error) {
-            alert("로그인 실패: " + (error.response?.data || "정보를 확인하세요."));
+            console.error("로그인 에러 데이터:", error.response?.data);
+            // [object Object] 방지를 위해 문자열인지 확인 후 출력
+            const errorDetail = typeof error.response?.data === 'string'
+                ? error.response.data
+                : (error.response?.data?.message || "로그인 정보를 확인하세요.");
+            alert("로그인 실패: " + errorDetail);
         }
     };
 
-    const handleLogout = () => {
+    // 로그아웃
+    const handleLogout = async () => {
+        try {
+            await api.post('/api/auth/logout');
+        } catch (e) {}
+
         setIsLoggedIn(false);
         setCurrentUser(null);
+        setHistory([]);
+        setResult('');
+        setSelectedId(null);
+
         localStorage.removeItem('isLoggedIn');
         localStorage.removeItem('user');
+
         alert("로그아웃 되었습니다.");
     };
 
+
+    // 회원 탈퇴
     const handleWithdraw = async () => {
+        if (!currentUser?.email) return alert("로그인 정보가 없습니다.");
         if (!window.confirm("정말로 탈퇴하시겠습니까? 데이터가 모두 삭제됩니다.")) return;
         try {
             await api.delete(`/api/auth/withdraw?email=${currentUser.email}`);
@@ -99,7 +137,7 @@ function App() {
         }
     };
 
-    // --- 기존 분석 기능 함수 ---
+    // --- 분석 기능 함수 ---
     const fetchHistory = async () => {
         try {
             const { data } = await api.get('/api/ai/history');
@@ -113,6 +151,7 @@ function App() {
         if (isLoggedIn) fetchHistory();
     }, [isLoggedIn]);
 
+    // WebSocket 연결
     useEffect(() => {
         if (selectedId) {
             setMessages([]);
@@ -137,26 +176,38 @@ function App() {
     const handleCheck = async () => {
         if (!resume.trim()) return alert("이력서 내용을 입력해주세요.");
         setLoading(true);
+        setResult(''); // 새로운 분석 시작 시 이전 결과 초기화
         try {
             const { data } = await api.post('/api/ai/resume-check', { resume });
             setResult(data.content);
             fetchHistory();
-        } catch (error) { alert("분석 중 오류 발생"); } finally { setLoading(false); }
+        } catch (error) {
+            alert("분석 중 오류 발생");
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleFileUpload = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        if (file.type !== "application/pdf") return alert("PDF 파일만 업로드 가능합니다.");
+
         const formData = new FormData();
         formData.append('file', file);
         setLoading(true);
+        setResult('');
         try {
             const { data } = await api.post('/api/ai/upload-resume', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
             setResult(data.content);
             fetchHistory();
-        } catch (error) { alert("업로드 실패"); } finally { setLoading(false); }
+        } catch (error) {
+            alert("업로드 실패");
+        } finally {
+            setLoading(false);
+        }
     };
 
     const sendChatMessage = () => {
@@ -168,18 +219,19 @@ function App() {
         }
     };
 
-    // --- 조건부 렌더링 ---
+    // --- 렌더링 ---
 
-    // 1. 로그인 전 화면
+
+
     if (!isLoggedIn) {
         return (
             <div style={styles.authContainer}>
                 <div style={styles.authCard}>
                     <h2 style={{ color: '#4CAF50', marginBottom: '20px' }}>{authMode === 'login' ? '로그인' : '회원가입'}</h2>
-                    <input name="email" placeholder="이메일" onChange={handleAuthChange} style={styles.authInput} />
-                    <input name="password" type="password" placeholder="비밀번호" onChange={handleAuthChange} style={styles.authInput} />
+                    <input name="email" placeholder="이메일" value={authData.email} onChange={handleAuthChange} style={styles.authInput} />
+                    <input name="password" type="password" placeholder="비밀번호" value={authData.password} onChange={handleAuthChange} style={styles.authInput} />
                     {authMode === 'signup' && (
-                        <input name="nickname" placeholder="닉네임" onChange={handleAuthChange} style={styles.authInput} />
+                        <input name="nickname" placeholder="닉네임" value={authData.nickname} onChange={handleAuthChange} style={styles.authInput} />
                     )}
                     <button onClick={authMode === 'login' ? handleLogin : handleSignup} style={styles.authBtn}>
                         {authMode === 'login' ? '로그인' : '가입하기'}
@@ -192,13 +244,12 @@ function App() {
         );
     }
 
-    // 2. 메인 화면 (로그인 후)
     return (
         <div style={styles.container}>
             <header style={styles.header}>
                 <h1 style={styles.title}>🚀 AI 이력서 검토 시스템</h1>
                 <div style={styles.userSection}>
-                    <span style={styles.userInfo}>{currentUser?.nickname}님 환영합니다!</span>
+                    <span style={styles.userInfo}><strong>{currentUser?.nickname}</strong>님 환영합니다!</span>
                     <button onClick={handleLogout} style={styles.miniBtn}>로그아웃</button>
                     <button onClick={handleWithdraw} style={{ ...styles.miniBtn, backgroundColor: '#c62828' }}>탈퇴</button>
                 </div>
@@ -232,25 +283,55 @@ function App() {
                 <section style={styles.middlePanel}>
                     <div style={styles.reportHeader}>
                         <h3 style={{ ...styles.cardTitle, color: '#fff', margin: 0 }}>📋 분석 리포트</h3>
-                        {selectedId && <button onClick={() => window.location.href=`http://localhost:8080/api/ai/download-pdf/${selectedId}`} style={styles.downloadButton}>PDF 저장</button>}
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            {/* 이메일 발송 버튼: 리포트 결과(result)가 있을 때만 표시 */}
+                            {result && (
+                                <button onClick={handleEmailSend} style={{ ...styles.downloadButton, backgroundColor: '#1976d2' }}>
+                                    이메일 발송
+                                </button>
+                            )}
+
+                            {/* PDF 저장 버튼: 저장된 데이터(selectedId)가 있을 때만 표시 */}
+                            {selectedId && (
+                                <button
+                                    onClick={() => window.location.href=`http://localhost:8080/api/ai/download-pdf/${selectedId}`}
+                                    style={styles.downloadButton}
+                                >
+                                    PDF 저장
+                                </button>
+                            )}
+                        </div>
                     </div>
+
                     <div style={styles.reportContent}>
-                        {result ? <div style={styles.markdownArea}><ReactMarkdown>{result}</ReactMarkdown></div> : <div style={styles.emptyState}>분석 내역을 선택하세요.</div>}
+                        {loading ? (
+                            <div style={styles.skeletonContainer}>
+                                <div style={styles.skeletonTitle}></div>
+                                <div style={styles.skeletonLine}></div>
+                                <div style={styles.skeletonLine}></div>
+                                <div style={styles.skeletonLine}></div>
+                                <p style={{ textAlign: 'center', color: '#888', marginTop: '20px' }}>AI가 이력서를 분석 중입니다...</p>
+                            </div>
+                        ) : result ? (
+                            <div style={styles.markdownArea}><ReactMarkdown>{result}</ReactMarkdown></div>
+                        ) : (
+                            <div style={styles.emptyState}>분석할 이력서를 입력하거나 내역을 선택하세요.</div>
+                        )}
                     </div>
                 </section>
 
                 <section style={styles.rightPanel}>
                     <h3 style={styles.cardTitle}>💬 AI 실시간 상담</h3>
                     <div style={styles.chatWindow}>
-                        {messages.map((msg, i) => (
+                        {messages.length > 0 ? messages.map((msg, i) => (
                             <div key={i} style={msg.sender === 'AI' ? styles.aiMsgBox : styles.userMsgBox}>
                                 <div style={msg.sender === 'AI' ? styles.aiMsg : styles.userMsg}>{msg.content}</div>
                             </div>
-                        ))}
+                        )) : <div style={styles.emptyChat}>리포트에 대해 궁금한 점을 질문하세요.</div>}
                         <div ref={chatEndRef} />
                     </div>
                     <div style={styles.chatInputBox}>
-                        <input style={styles.chatInput} value={inputChat} onChange={(e) => setInputChat(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && sendChatMessage()} placeholder="질문 입력..." disabled={!selectedId} />
+                        <input style={styles.chatInput} value={inputChat} onChange={(e) => setInputChat(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && sendChatMessage()} placeholder={selectedId ? "질문 입력..." : "이력을 먼저 선택하세요"} disabled={!selectedId} />
                         <button onClick={sendChatMessage} disabled={!selectedId} style={styles.sendBtn}>전송</button>
                     </div>
                 </section>
@@ -260,63 +341,19 @@ function App() {
 }
 
 const styles = {
-    // --- 수정된 인증 관련 스타일 ---
-    authContainer: {
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        width: '100vw', // 화면 전체 너비 확보
-        backgroundColor: '#121212',
-        position: 'fixed', // 다른 요소에 방해받지 않도록 고정
-        top: 0,
-        left: 0
-    },
-    authCard: {
-        backgroundColor: '#1e1e1e',
-        padding: '40px',
-        borderRadius: '16px', // 조금 더 부드러운 곡선
-        width: '380px', // 너비 약간 확대
-        textAlign: 'center',
-        border: '1px solid #333',
-        boxShadow: '0 10px 30px rgba(0,0,0,0.5)' // 입체감 추가
-    },
-    authInput: {
-        width: '100%',
-        padding: '14px',
-        marginBottom: '15px',
-        backgroundColor: '#2a2a2a',
-        border: '1px solid #444',
-        borderRadius: '8px',
-        color: 'white',
-        boxSizing: 'border-box',
-        fontSize: '14px',
-        outline: 'none'
-    },
-    authBtn: {
-        width: '100%',
-        padding: '14px',
-        backgroundColor: '#4CAF50',
-        color: 'white',
-        border: 'none',
-        borderRadius: '8px',
-        cursor: 'pointer',
-        fontWeight: 'bold',
-        fontSize: '16px',
-        marginTop: '10px',
-        transition: 'background-color 0.2s'
-    },
-    authToggle: {
-        marginTop: '25px',
-        fontSize: '14px',
-        color: '#888',
-        cursor: 'pointer',
-        textDecoration: 'none'
-    },
+    authContainer: { display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', width: '100vw', backgroundColor: '#121212', position: 'fixed', top: 0, left: 0 },
+    authCard: { backgroundColor: '#1e1e1e', padding: '40px', borderRadius: '16px', width: '380px', textAlign: 'center', border: '1px solid #333', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' },
+    authInput: { width: '100%', padding: '14px', marginBottom: '15px', backgroundColor: '#2a2a2a', border: '1px solid #444', borderRadius: '8px', color: 'white', boxSizing: 'border-box', fontSize: '14px', outline: 'none' },
+    authBtn: { width: '100%', padding: '14px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '16px', marginTop: '10px' },
+    authToggle: { marginTop: '25px', fontSize: '14px', color: '#888', cursor: 'pointer', textDecoration: 'none' },
 
-    // --- 나머지 기존 스타일 유지 (userSection부터 동일) ---
+    // 스켈레톤 스타일 추가
+    skeletonContainer: { display: 'flex', flexDirection: 'column', gap: '15px', padding: '10px' },
+    skeletonTitle: { height: '30px', width: '60%', backgroundColor: '#f0f0f0', borderRadius: '4px', animation: 'pulse 1.5s infinite ease-in-out' },
+    skeletonLine: { height: '15px', width: '100%', backgroundColor: '#f5f5f5', borderRadius: '4px', animation: 'pulse 1.5s infinite ease-in-out' },
+
     userSection: { display: 'flex', alignItems: 'center', gap: '10px' },
-    userInfo: { fontSize: '13px', color: '#ccc' },
+    userInfo: { fontSize: '14px', color: '#ccc' },
     miniBtn: { padding: '5px 10px', fontSize: '11px', backgroundColor: '#444', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' },
     container: { display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#121212', color: '#eee', padding: '20px', boxSizing: 'border-box' },
     header: { marginBottom: '15px', borderBottom: '1px solid #333', paddingBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
@@ -332,7 +369,7 @@ const styles = {
     fileButton: { backgroundColor: '#1976d2', color: '#fff', padding: '8px 15px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' },
     actionButton: { width: '100%', padding: '12px', backgroundColor: '#4CAF50', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' },
     historyList: { flex: 1, overflowY: 'auto' },
-    historyItem: { padding: '12px', marginBottom: '10px', borderRadius: '8px', cursor: 'pointer' },
+    historyItem: { padding: '12px', marginBottom: '10px', borderRadius: '8px', cursor: 'pointer', transition: '0.2s' },
     historyDate: { fontSize: '10px', color: '#888' },
     historyText: { margin: '5px 0 0 0', fontSize: '13px' },
     reportHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px', borderBottom: '1px solid #333' },
