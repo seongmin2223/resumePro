@@ -50,4 +50,4 @@ src/main/resources/application-secret.yml
 Thumbs.db
 
 # 설정 파일 제외
-/src/main/resources/application.properties
+*.resources
